@@ -1,0 +1,60 @@
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+    volumes:
+      - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+    command: ["python", "-m", "project_invest", "api", "--host", "0.0.0.0", "--port", "8000"]
+    env_file:
+      - .env
+    environment:
+      PROJECT_INVEST_LIVE_LOOP_ENABLED: "false"
+    volumes:
+      - ./runtime:/app/runtime
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+    command: ["python", "-m", "project_invest", "worker"]
+    env_file:
+      - .env
+    volumes:
+      - ./runtime:/app/runtime
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: project_invest
+      POSTGRES_USER: project_invest
+      POSTGRES_PASSWORD: project_invest
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+

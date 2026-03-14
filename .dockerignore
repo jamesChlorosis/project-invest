@@ -1,0 +1,11 @@
+.env
+.pytest_cache
+.venv
+__pycache__
+*.pyc
+runtime
+dist
+build
+postgres_data
+redis_data
+
