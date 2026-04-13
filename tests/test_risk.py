@@ -11,6 +11,8 @@ def test_risk_manager_reduces_position_size_when_needed() -> None:
         max_daily_loss=0.03,
         max_positions=5,
         max_gross_exposure=1.0,
+        max_position_pct=0.2,
+        max_drawdown=0.2,
     )
     manager = RiskManager(limits)
     genome = StrategyGenome(stop_loss_pct=0.02)

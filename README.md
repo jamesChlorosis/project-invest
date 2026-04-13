@@ -63,15 +63,21 @@ This version is intentionally modular so a future broker adapter can replace the
    Copy-Item .env.example .env
    ```
 
-3. Run the API:
+3. Run the full local stack:
 
    ```powershell
-   uvicorn project_invest.api.app:app --reload
+   python -m project_invest launch --host 0.0.0.0 --port 8000
    ```
 
 4. Open [http://localhost:8000](http://localhost:8000)
 
-5. Trigger a research cycle:
+5. Or use the bundled Windows launcher:
+
+   ```cmd
+   run-project-invest.cmd
+   ```
+
+6. Trigger a research cycle:
 
    ```powershell
    Invoke-RestMethod -Method Post http://localhost:8000/api/research/run
@@ -85,17 +91,43 @@ This version is intentionally modular so a future broker adapter can replace the
   python -m project_invest api --host 0.0.0.0 --port 8000
   ```
 
+- Full local stack from one command
+
+  ```powershell
+  python -m project_invest launch --host 0.0.0.0 --port 8000
+  ```
+
+- Full local stack with a Cloudflare public URL
+
+  ```powershell
+  python -m project_invest launch --host 0.0.0.0 --port 8000 --public
+  ```
+
 - One research cycle
 
   ```powershell
   python -m project_invest run-once
   ```
 
-- Continuous worker
+- One trading cycle
 
   ```powershell
-  python -m project_invest worker
+  python -m project_invest trade-once
   ```
+
+- Continuous research worker
+
+  ```powershell
+  python -m project_invest worker --mode research
+  ```
+
+- Continuous trading worker
+
+  ```powershell
+  python -m project_invest worker --mode trading
+  ```
+
+If you use `launch`, do not start extra worker processes manually. The launcher already starts the API, research worker, and trading worker together.
 
 ## Docker
 
@@ -112,6 +144,7 @@ This version is intentionally modular so a future broker adapter can replace the
   ```
 
 Production deployment guidance lives in [DEPLOY_ORACLE.md](DEPLOY_ORACLE.md).
+For a copy-paste VPS walkthrough tailored to this repo, use [DEPLOY_VPS.md](DEPLOY_VPS.md).
 
 ## Environment knobs
 
@@ -124,8 +157,12 @@ Production deployment guidance lives in [DEPLOY_ORACLE.md](DEPLOY_ORACLE.md).
 - `PROJECT_INVEST_REDIS_URL`: Redis URL for the optional cache layer
 - `PROJECT_INVEST_RESEARCH_SYMBOLS`: comma-separated symbols
 - `PROJECT_INVEST_RESEARCH_INTERVAL`: `1d`, `1h`, `1m`, etc.
-- `PROJECT_INVEST_LIVE_LOOP_ENABLED`: run the research loop automatically
-- `PROJECT_INVEST_LIVE_LOOP_SECONDS`: interval between research cycles
+- `PROJECT_INVEST_RESEARCH_LOOP_ENABLED`: run the research loop inside the API process
+- `PROJECT_INVEST_RESEARCH_LOOP_SECONDS`: interval between research cycles
+- `PROJECT_INVEST_TRADING_LOOP_ENABLED`: run the trading loop inside the API process
+- `PROJECT_INVEST_TRADING_LOOP_SECONDS`: interval between trading cycles
+- `PROJECT_INVEST_LIVE_LOOP_ENABLED`: legacy combined loop flag
+- `PROJECT_INVEST_LIVE_LOOP_SECONDS`: legacy combined loop interval
 - `PROJECT_INVEST_STARTING_CAPITAL`: paper portfolio capital
 - `PROJECT_INVEST_MAX_RISK_PER_TRADE`: risk budget per position
 - `PROJECT_INVEST_LIVE_MAX_RISK_PER_TRADE`: tighter live risk cap
@@ -141,10 +178,10 @@ Production deployment guidance lives in [DEPLOY_ORACLE.md](DEPLOY_ORACLE.md).
 
 ## Production recommendation
 
-- API and worker should run as separate processes
+- API, research worker, and trading worker should run as separate processes
 - use `PROJECT_INVEST_STORAGE_BACKEND=postgres`
 - use Redis as an optional cache layer
-- keep `PROJECT_INVEST_LIVE_LOOP_ENABLED=false` when a dedicated worker container is running
+- keep all `PROJECT_INVEST_*_LOOP_ENABLED=false` when dedicated worker containers are running
 
 ## Roadmap
 

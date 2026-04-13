@@ -7,3 +7,5 @@ __pycache__/
 runtime/
 dist/
 build/
+.tmp_*
+*.bak

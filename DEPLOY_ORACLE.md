@@ -1,6 +1,6 @@
 # Oracle VM Deployment
 
-This guide deploys Project Invest on a single Oracle Cloud Always Free VM using Docker Compose.
+This guide deploys Project Invest on a single Oracle Cloud VM using Docker Compose.
 
 ## Recommended production shape
 
@@ -8,8 +8,10 @@ This guide deploys Project Invest on a single Oracle Cloud Always Free VM using 
   - public entrypoint on port 80
 - `api`
   - FastAPI dashboard and API
-- `worker`
-  - continuous research loop
+- `research_worker`
+  - continuous strategy discovery and validation loop
+- `trading_worker`
+  - continuous paper-trading execution loop
 - `postgres`
   - durable state for candles, features, trades, portfolio, and reports
 - `redis`
@@ -59,23 +61,34 @@ Recommended production values:
 
 ```env
 PROJECT_INVEST_EXECUTION_MODE=paper
-PROJECT_INVEST_MARKET_DATA_PROVIDER=mock
+PROJECT_INVEST_MARKET_DATA_PROVIDER=yahoo
+PROJECT_INVEST_ALLOW_MOCK_FALLBACK=true
 PROJECT_INVEST_STORAGE_BACKEND=postgres
 PROJECT_INVEST_STORAGE_CACHE_ENABLED=true
 PROJECT_INVEST_POSTGRES_DSN=postgresql://project_invest:project_invest@postgres:5432/project_invest
 PROJECT_INVEST_POSTGRES_SCHEMA=project_invest
 PROJECT_INVEST_REDIS_URL=redis://redis:6379/0
-PROJECT_INVEST_LIVE_LOOP_ENABLED=false
-PROJECT_INVEST_LIVE_LOOP_SECONDS=300
+PROJECT_INVEST_USE_MARKET_UNIVERSES=true
+PROJECT_INVEST_MARKET_UNIVERSES=NSE
+PROJECT_INVEST_EXECUTION_MARKETS=NSE
 PROJECT_INVEST_RESEARCH_SYMBOLS=RELIANCE.NS,TCS.NS,INFY.NS
+PROJECT_INVEST_RESEARCH_INTERVAL=15m
+PROJECT_INVEST_TRADING_INTERVAL=5m
+PROJECT_INVEST_RESEARCH_LOOP_ENABLED=false
+PROJECT_INVEST_RESEARCH_LOOP_SECONDS=21600
+PROJECT_INVEST_TRADING_LOOP_ENABLED=false
+PROJECT_INVEST_TRADING_LOOP_SECONDS=900
+PROJECT_INVEST_LIVE_LOOP_ENABLED=false
 ```
 
 Notes:
 
-- `PROJECT_INVEST_LIVE_LOOP_ENABLED=false`
-  - keep the worker loop in the dedicated `worker` container, not inside the API
-- use `mock` first
-  - switch to `yahoo` only after base deployment is stable
+- keep all `*_LOOP_ENABLED` flags set to `false`
+  - the dedicated worker containers own the long-running loops in production
+- `PROJECT_INVEST_ALLOW_MOCK_FALLBACK=true`
+  - keeps the platform alive if Yahoo has a transient failure
+- start with `NSE` only
+  - then add more universes after the box is stable
 
 ## 4. Start the stack
 
@@ -93,7 +106,8 @@ Check logs:
 
 ```bash
 docker compose -f docker-compose.prod.yml logs -f api
-docker compose -f docker-compose.prod.yml logs -f worker
+docker compose -f docker-compose.prod.yml logs -f research_worker
+docker compose -f docker-compose.prod.yml logs -f trading_worker
 ```
 
 ## 5. Open the dashboard
@@ -142,13 +156,14 @@ docker compose -f docker-compose.prod.yml up --build -d
 If `/health` loads but no research happens:
 
 - inspect the worker logs
-- confirm `worker` is running in `docker compose ps`
+- confirm `research_worker` and `trading_worker` are running in `docker compose ps`
 - confirm the `.env` values point to `postgres` and `redis`, not `localhost`
 
 If the app fails on startup:
 
 - check `docker compose logs api`
-- check `docker compose logs worker`
+- check `docker compose logs research_worker`
+- check `docker compose logs trading_worker`
 - verify the `PROJECT_INVEST_POSTGRES_DSN` uses host `postgres`
 - verify the `PROJECT_INVEST_REDIS_URL` uses host `redis`
 

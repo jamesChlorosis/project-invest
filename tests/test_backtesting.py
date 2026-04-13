@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from project_invest.domain.models import Candle, StrategyGenome
+from project_invest.domain.models import Candle, StrategyFamily, StrategyGenome
 from project_invest.services.backtesting import BacktestingEngine
 from project_invest.services.strategy_signals import StrategySignalEngine
 
@@ -37,6 +37,7 @@ def test_backtester_finds_positive_result_on_clean_trend() -> None:
         max_risk_per_trade=0.05,
     )
     genome = StrategyGenome(
+        family=StrategyFamily.TREND_FOLLOWING,
         short_window=3,
         long_window=8,
         momentum_threshold=0.0,
@@ -51,3 +52,27 @@ def test_backtester_finds_positive_result_on_clean_trend() -> None:
     assert result.metrics.final_equity >= 100000.0
     assert result.metrics.total_return >= 0
 
+
+def test_walk_forward_validation_preserves_positive_trend_edge() -> None:
+    signal_engine = StrategySignalEngine()
+    backtester = BacktestingEngine(
+        signal_engine=signal_engine,
+        slippage_bps=0,
+        fee_bps=0,
+        max_risk_per_trade=0.05,
+    )
+    genome = StrategyGenome(
+        family=StrategyFamily.TREND_FOLLOWING,
+        short_window=5,
+        long_window=18,
+        momentum_threshold=0.0,
+        stop_loss_pct=0.02,
+        take_profit_pct=0.18,
+        risk_fraction=0.2,
+    )
+
+    metrics = backtester.run_walk_forward("TREND", make_trending_candles(180), genome, initial_capital=100000.0)
+
+    assert metrics.trades >= 1
+    assert metrics.final_equity >= 100000.0
+    assert metrics.total_return >= 0

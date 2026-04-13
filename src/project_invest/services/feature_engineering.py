@@ -3,9 +3,13 @@ from __future__ import annotations
 from statistics import fmean, pstdev
 
 from project_invest.domain.models import Candle, FeatureRow
+from project_invest.services.sentiment import SentimentProvider, SentimentSnapshot
 
 
 class FeatureEngineeringEngine:
+    def __init__(self, sentiment_provider: SentimentProvider | None = None) -> None:
+        self.sentiment_provider = sentiment_provider
+
     def build_feature_rows(self, candles: list[Candle]) -> list[FeatureRow]:
         if not candles:
             return []
@@ -15,6 +19,7 @@ class FeatureEngineeringEngine:
         ema_12 = self._ema_series(closes, 12)
         ema_26 = self._ema_series(closes, 26)
         rsi_14 = self._rsi_series(closes, 14)
+        sentiment_snapshot = self._sentiment_snapshot(candles[-1].symbol)
 
         rows: list[FeatureRow] = []
         for index, candle in enumerate(candles):
@@ -31,6 +36,8 @@ class FeatureEngineeringEngine:
                     momentum_5=self._momentum(closes, index, 5),
                     volatility_10=self._volatility(closes, index, 10),
                     volume_zscore_20=self._zscore(volumes, index, 20),
+                    sentiment_score=sentiment_snapshot.score,
+                    news_intensity=sentiment_snapshot.intensity,
                 )
             )
         return rows
@@ -108,3 +115,8 @@ class FeatureEngineeringEngine:
             return 0.0
         mean_value = fmean(sample)
         return round((values[index] - mean_value) / std_dev, 6)
+
+    def _sentiment_snapshot(self, symbol: str) -> SentimentSnapshot:
+        if self.sentiment_provider is None:
+            return SentimentSnapshot(score=0.0, intensity=0.0)
+        return self.sentiment_provider.get_snapshot(symbol)

@@ -32,17 +32,21 @@ class BacktestingEngine:
         candles: list[Candle],
         genome: StrategyGenome,
         initial_capital: float,
+        trade_start_index: int | None = None,
     ) -> BacktestResult:
         genome = self.signal_engine.normalize_genome(genome)
-        if len(candles) < genome.long_window + 1:
+        required_bars = self.signal_engine.required_bars(genome)
+        if len(candles) < required_bars:
             return BacktestResult(genome=genome, metrics=self._empty_metrics(initial_capital))
 
         cash = initial_capital
         equity_curve = [initial_capital]
         trades: list[BacktestTrade] = []
         position: dict[str, object] | None = None
+        warmup_start_index = max(0, required_bars - 1)
+        entry_start_index = max(warmup_start_index, trade_start_index or warmup_start_index)
 
-        for index in range(genome.long_window, len(candles)):
+        for index in range(warmup_start_index, len(candles)):
             candle = candles[index]
             window = candles[: index + 1]
 
@@ -76,7 +80,7 @@ class BacktestingEngine:
                     )
                     position = None
 
-            if position is None:
+            if position is None and index >= entry_start_index:
                 signal = self.signal_engine.generate_signal(genome, window, has_position=False)
                 if signal.action == SignalAction.BUY:
                     fill_price = candle.close * (1 + self.slippage_multiplier)
@@ -122,6 +126,50 @@ class BacktestingEngine:
 
         metrics = self._build_metrics(initial_capital, cash, equity_curve, trades)
         return BacktestResult(genome=genome, metrics=metrics, trades=trades)
+
+    def run_walk_forward(
+        self,
+        symbol: str,
+        candles: list[Candle],
+        genome: StrategyGenome,
+        initial_capital: float,
+    ) -> BacktestMetrics:
+        genome = self.signal_engine.normalize_genome(genome)
+        required_bars = self.signal_engine.required_bars(genome)
+        minimum_total_bars = max((required_bars * 2) + 20, 80)
+        if len(candles) < minimum_total_bars:
+            return self.run(symbol, candles, genome, initial_capital).metrics
+
+        test_size = max(required_bars, len(candles) // 6, 30)
+        initial_train_size = max(required_bars * 3, len(candles) // 2, 90)
+        initial_train_size = min(initial_train_size, len(candles) - max(test_size, 15))
+        if initial_train_size <= required_bars:
+            return self.run(symbol, candles, genome, initial_capital).metrics
+
+        fold_metrics: list[BacktestMetrics] = []
+        train_end = initial_train_size
+
+        while train_end < len(candles):
+            test_end = min(len(candles), train_end + test_size)
+            out_of_sample_bars = test_end - train_end
+            if out_of_sample_bars < max(10, min(required_bars, 20)):
+                break
+
+            segment = candles[:test_end]
+            result = self.run(
+                symbol,
+                segment,
+                genome,
+                initial_capital,
+                trade_start_index=train_end,
+            )
+            fold_metrics.append(result.metrics)
+            train_end = test_end
+
+        if not fold_metrics:
+            return self.run(symbol, candles, genome, initial_capital).metrics
+
+        return self._aggregate_metrics(initial_capital, fold_metrics)
 
     def _position_size(
         self,
@@ -226,3 +274,36 @@ class BacktestingEngine:
             final_equity=round(initial_capital, 4),
         )
 
+    def _aggregate_metrics(
+        self,
+        initial_capital: float,
+        fold_metrics: list[BacktestMetrics],
+    ) -> BacktestMetrics:
+        compounded_equity = initial_capital
+        for metrics in fold_metrics:
+            compounded_equity *= 1 + metrics.total_return
+
+        total_trades = sum(metrics.trades for metrics in fold_metrics)
+        traded_folds = [metrics for metrics in fold_metrics if metrics.trades > 0]
+        weight_basis = sum(metrics.trades for metrics in traded_folds)
+
+        if weight_basis > 0:
+            win_rate = sum(metrics.win_rate * metrics.trades for metrics in traded_folds) / weight_basis
+            profit_factor = sum(metrics.profit_factor * metrics.trades for metrics in traded_folds) / weight_basis
+        else:
+            win_rate = fmean(metrics.win_rate for metrics in fold_metrics)
+            profit_factor = fmean(metrics.profit_factor for metrics in fold_metrics)
+
+        total_return = (compounded_equity / initial_capital) - 1 if initial_capital else 0.0
+        sharpe_ratio = fmean(metrics.sharpe_ratio for metrics in fold_metrics)
+        max_drawdown = max(metrics.max_drawdown for metrics in fold_metrics)
+
+        return BacktestMetrics(
+            total_return=round(total_return, 6),
+            sharpe_ratio=round(sharpe_ratio, 6),
+            max_drawdown=round(max_drawdown, 6),
+            win_rate=round(win_rate, 6),
+            profit_factor=round(profit_factor, 6),
+            trades=total_trades,
+            final_equity=round(compounded_equity, 4),
+        )

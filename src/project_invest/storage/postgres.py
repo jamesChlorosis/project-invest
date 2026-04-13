@@ -3,7 +3,18 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from project_invest.domain.models import Candle, ExecutionOrder, FeatureRow, PortfolioSnapshot, ResearchCycleReport
+from project_invest.domain.models import (
+    Candle,
+    ExecutionOrder,
+    FeatureRow,
+    PortfolioSnapshot,
+    ResearchCycleReport,
+    ResearchEvent,
+    TradeMemoryRecord,
+    TradeMemoryStatus,
+    StrategyGenome,
+    StrategyRegistryEntry,
+)
 
 
 class PostgresResearchStorage:
@@ -66,6 +77,37 @@ class PostgresResearchStorage:
                 report_key TEXT PRIMARY KEY,
                 payload JSONB NOT NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """,
+            f"""
+            CREATE TABLE IF NOT EXISTS {self.schema}.research_events (
+                event_id TEXT PRIMARY KEY,
+                payload JSONB NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """,
+            f"""
+            CREATE TABLE IF NOT EXISTS {self.schema}.trade_memory (
+                memory_id TEXT PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                status TEXT NOT NULL,
+                payload JSONB NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """,
+            f"""
+            CREATE TABLE IF NOT EXISTS {self.schema}.active_strategies (
+                symbol TEXT PRIMARY KEY,
+                payload JSONB NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """,
+            f"""
+            CREATE TABLE IF NOT EXISTS {self.schema}.strategy_registry (
+                symbol TEXT PRIMARY KEY,
+                payload JSONB NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
             """,
         ]
@@ -182,9 +224,11 @@ class PostgresResearchStorage:
             return trades
         return list(reversed(trades))
 
-    def save_latest_report(self, report: ResearchCycleReport) -> None:
+    def save_latest_report(self, report: ResearchCycleReport, stream: str = "research") -> None:
         payload = report.model_dump(mode="json")
         historical_key = report.finished_at.strftime("%Y%m%dT%H%M%S")
+        latest_key = f"latest:{stream}"
+        historical_stream_key = f"{stream}:{historical_key}"
         self._upsert_json(
             f"""
             INSERT INTO {self.schema}.research_reports (report_key, payload, created_at)
@@ -192,7 +236,7 @@ class PostgresResearchStorage:
             ON CONFLICT (report_key)
             DO UPDATE SET payload = EXCLUDED.payload
             """,
-            ("latest", payload),
+            (latest_key, payload),
         )
         self._upsert_json(
             f"""
@@ -201,20 +245,166 @@ class PostgresResearchStorage:
             ON CONFLICT (report_key)
             DO UPDATE SET payload = EXCLUDED.payload
             """,
-            (historical_key, payload),
+            (historical_stream_key, payload),
         )
 
-    def load_latest_report(self) -> ResearchCycleReport | None:
+    def load_latest_report(self, stream: str = "research") -> ResearchCycleReport | None:
         row = self._fetch_one(
             f"""
             SELECT payload
             FROM {self.schema}.research_reports
-            WHERE report_key = 'latest'
+            WHERE report_key = %s
             """,
+            (f"latest:{stream}",),
         )
         if row is None:
             return None
         return ResearchCycleReport.model_validate(row["payload"])
+
+    def append_event(self, event: ResearchEvent) -> None:
+        self._upsert_json(
+            f"""
+            INSERT INTO {self.schema}.research_events (event_id, payload, created_at)
+            VALUES (%s, %s, NOW())
+            ON CONFLICT (event_id)
+            DO UPDATE SET payload = EXCLUDED.payload
+            """,
+            (event.event_id, event.model_dump(mode="json")),
+        )
+
+    def load_events(self, limit: int | None = None) -> list[ResearchEvent]:
+        limit_clause = ""
+        params: list[Any] = []
+        order_clause = "ORDER BY created_at ASC"
+        if limit is not None:
+            order_clause = "ORDER BY created_at DESC"
+            limit_clause = "LIMIT %s"
+            params.append(limit)
+
+        rows = self._fetch_all(
+            f"""
+            SELECT payload
+            FROM {self.schema}.research_events
+            {order_clause}
+            {limit_clause}
+            """,
+            tuple(params),
+        )
+        events = [ResearchEvent.model_validate(row["payload"]) for row in rows]
+        if limit is None:
+            return events
+        return list(reversed(events))
+
+    def save_trade_memory(self, record: TradeMemoryRecord) -> None:
+        self._upsert_json(
+            f"""
+            INSERT INTO {self.schema}.trade_memory (memory_id, symbol, status, payload, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, NOW(), NOW())
+            ON CONFLICT (memory_id)
+            DO UPDATE SET
+                symbol = EXCLUDED.symbol,
+                status = EXCLUDED.status,
+                payload = EXCLUDED.payload,
+                updated_at = NOW()
+            """,
+            (record.memory_id, record.symbol, record.status.value, record.model_dump(mode="json")),
+        )
+
+    def load_trade_memory(self, limit: int | None = None) -> list[TradeMemoryRecord]:
+        limit_clause = ""
+        params: list[Any] = []
+        order_clause = "ORDER BY created_at ASC"
+        if limit is not None:
+            order_clause = "ORDER BY created_at DESC"
+            limit_clause = "LIMIT %s"
+            params.append(limit)
+
+        rows = self._fetch_all(
+            f"""
+            SELECT payload
+            FROM {self.schema}.trade_memory
+            {order_clause}
+            {limit_clause}
+            """,
+            tuple(params),
+        )
+        records = [TradeMemoryRecord.model_validate(row["payload"]) for row in rows]
+        if limit is None:
+            return records
+        return list(reversed(records))
+
+    def load_open_trade_memory(self, symbol: str) -> TradeMemoryRecord | None:
+        row = self._fetch_one(
+            f"""
+            SELECT payload
+            FROM {self.schema}.trade_memory
+            WHERE symbol = %s AND status = %s
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (symbol, TradeMemoryStatus.OPEN.value),
+        )
+        if row is None:
+            return None
+        return TradeMemoryRecord.model_validate(row["payload"])
+
+    def save_active_strategy(self, symbol: str, genome: StrategyGenome) -> None:
+        self._upsert_json(
+            f"""
+            INSERT INTO {self.schema}.active_strategies (symbol, payload, updated_at)
+            VALUES (%s, %s, NOW())
+            ON CONFLICT (symbol)
+            DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()
+            """,
+            (symbol, genome.model_dump(mode="json")),
+        )
+
+    def load_active_strategy(self, symbol: str) -> StrategyGenome | None:
+        row = self._fetch_one(
+            f"""
+            SELECT payload
+            FROM {self.schema}.active_strategies
+            WHERE symbol = %s
+            """,
+            (symbol,),
+        )
+        if row is None:
+            return None
+        return StrategyGenome.model_validate(row["payload"])
+
+    def delete_active_strategy(self, symbol: str) -> None:
+        with self._connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"DELETE FROM {self.schema}.active_strategies WHERE symbol = %s",
+                    (symbol,),
+                )
+            connection.commit()
+
+    def save_strategy_registry(self, symbol: str, entries: list[StrategyRegistryEntry]) -> None:
+        payload = [entry.model_dump(mode="json") for entry in entries]
+        self._upsert_json(
+            f"""
+            INSERT INTO {self.schema}.strategy_registry (symbol, payload, updated_at)
+            VALUES (%s, %s, NOW())
+            ON CONFLICT (symbol)
+            DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()
+            """,
+            (symbol, payload),
+        )
+
+    def load_strategy_registry(self, symbol: str) -> list[StrategyRegistryEntry]:
+        row = self._fetch_one(
+            f"""
+            SELECT payload
+            FROM {self.schema}.strategy_registry
+            WHERE symbol = %s
+            """,
+            (symbol,),
+        )
+        if row is None:
+            return []
+        return [StrategyRegistryEntry.model_validate(item) for item in row["payload"]]
 
     def close(self) -> None:
         return None

@@ -16,6 +16,8 @@ services:
     env_file:
       - .env
     environment:
+      PROJECT_INVEST_RESEARCH_LOOP_ENABLED: "false"
+      PROJECT_INVEST_TRADING_LOOP_ENABLED: "false"
       PROJECT_INVEST_LIVE_LOOP_ENABLED: "false"
     volumes:
       - ./runtime:/app/runtime
@@ -24,12 +26,33 @@ services:
       - redis
     restart: unless-stopped
 
-  worker:
+  research_worker:
     build:
       context: .
-    command: ["python", "-m", "project_invest", "worker"]
+    command: ["python", "-m", "project_invest", "worker", "--mode", "research"]
     env_file:
       - .env
+    environment:
+      PROJECT_INVEST_RESEARCH_LOOP_ENABLED: "false"
+      PROJECT_INVEST_TRADING_LOOP_ENABLED: "false"
+      PROJECT_INVEST_LIVE_LOOP_ENABLED: "false"
+    volumes:
+      - ./runtime:/app/runtime
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  trading_worker:
+    build:
+      context: .
+    command: ["python", "-m", "project_invest", "worker", "--mode", "trading"]
+    env_file:
+      - .env
+    environment:
+      PROJECT_INVEST_RESEARCH_LOOP_ENABLED: "false"
+      PROJECT_INVEST_TRADING_LOOP_ENABLED: "false"
+      PROJECT_INVEST_LIVE_LOOP_ENABLED: "false"
     volumes:
       - ./runtime:/app/runtime
     depends_on:
@@ -57,4 +80,3 @@ services:
 volumes:
   postgres_data:
   redis_data:
-

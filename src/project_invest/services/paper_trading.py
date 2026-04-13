@@ -159,6 +159,7 @@ class PaperBroker:
             requested_price=market_price,
             fill_price=round(fill_price, 4),
             fee_paid=round(fee, 4),
+            realized_pnl=0.0,
             note=decision.reason,
             strategy_id=signal.strategy_id,
         )
@@ -214,6 +215,7 @@ class PaperBroker:
             requested_price=market_price,
             fill_price=round(fill_price, 4),
             fee_paid=round(fee, 4),
+            realized_pnl=round(pnl, 4),
             note="Position closed.",
             strategy_id=signal.strategy_id,
         )
